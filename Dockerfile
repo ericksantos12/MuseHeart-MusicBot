@@ -1,9 +1,8 @@
-FROM python:3.10-slim
-COPY --from=openjdk:11-jdk-slim /usr/local/openjdk-11 /usr/local/openjdk-11
+FROM python:3.12-slim-bullseye
 
-ENV JAVA_HOME /usr/local/openjdk-11
-
-RUN update-alternatives --install /usr/bin/java java /usr/local/openjdk-11/bin/java 1
+ENV JAVA_HOME=/opt/java/openjdk
+COPY --from=eclipse-temurin:17 $JAVA_HOME $JAVA_HOME
+ENV PATH="${JAVA_HOME}/bin:${PATH}"
 
 WORKDIR /usr/src/app
 
