@@ -22,11 +22,13 @@ import aiohttp
 import disnake
 import requests
 from async_timeout import timeout
+from cachetools import TTLCache
 from disnake.ext import commands
 from disnake.http import Route
 from dotenv import dotenv_values
 from user_agent import generate_user_agent
 
+import wavelink
 from config_loader import load_config
 from utils.db import MongoDatabase, LocalDatabase, get_prefix, DBModel, global_db_models
 from utils.music.audio_sources.deezer import DeezerClient
@@ -66,16 +68,17 @@ class BotPool:
                                                                                   type=commands.BucketType.user)
 
     def __init__(self):
-        self.playlist_cache = {}
         self.user_prefix_cache = {}
         self.guild_prefix_cache = {}
         self.mongo_database: Optional[MongoDatabase] = None
         self.local_database: Optional[LocalDatabase] = None
         self.ws_client: Optional[WSClient] = None
+        self.config = self.load_cfg()
+        self.playlist_cache: TTLCache = self.load_playlist_cache()
+        self.integration_cache = TTLCache(maxsize=500, ttl=7200)
         self.spotify: Optional[SpotifyClient] = None
-        self.deezer = DeezerClient()
+        self.deezer = DeezerClient(self.playlist_cache)
         self.lavalink_instance: Optional[subprocess.Popen] = None
-        self.config = {}
         self.emoji_data = {}
         self.commit = ""
         self.remote_git_url = ""
@@ -83,7 +86,6 @@ class BotPool:
         self.message_ids: dict = {}
         self.bot_mentions = set()
         self.single_bot = True
-        self.rpc_token_cache: dict = {}
         self.failed_bots: dict = {}
         self.current_useragent = self.reset_useragent()
         self.processing_gc: bool = False
@@ -96,9 +98,24 @@ class BotPool:
         self.default_static_skin = self.config.get("DEFAULT_STATIC_SKIN", "default")
         self.default_controllerless_skin = self.config.get("DEFAULT_CONTROLLERLESS_SKIN", "default")
         self.default_idling_skin = self.config.get("DEFAULT_IDLING_SKIN", "default")
+        self.playlist_cache_updater_task: Optional[asyncio.Task] = None
 
     def reset_useragent(self):
         self.current_useragent = generate_user_agent()
+
+    def load_playlist_cache(self):
+
+        if os.path.exists("./local_database/playlist_cache.pkl"):
+            with open("./local_database/playlist_cache.pkl", 'rb') as f:
+                return pickle.load(f)
+
+        return TTLCache(maxsize=self.config["PLAYLIST_CACHE_SIZE"], ttl=self.config["PLAYLIST_CACHE_TTL"])
+
+    async def playlist_cache_updater(self):
+        while True:
+            await asyncio.sleep(300)
+            async with aiofiles.open("./local_database/playlist_cache.pkl", 'wb') as f:
+                await f.write(pickle.dumps(self.playlist_cache))
 
     async def connect_lavalink_queue_task(self, identifier: str):
 
@@ -317,17 +334,6 @@ class BotPool:
         for data in lavalink_servers.values():
             loop.create_task(self.check_node(data, loop=loop))
 
-    async def load_playlist_cache(self):
-
-        try:
-            async with aiofiles.open(f"./.playlist_cache.pkl", 'rb') as file:
-                data = pickle.loads(zlib.decompress(await file.read()))
-        except FileNotFoundError:
-            return
-
-        for url, track_data in data.items():
-            self.playlist_cache[url] = self.process_track_cls(track_data)
-
     def process_track_cls(self, data: list, playlists: dict = None):
 
         if not playlists:
@@ -379,7 +385,7 @@ class BotPool:
 
     def load_cfg(self):
 
-        self.config = load_config()
+        config = load_config()
 
         try:
             with open("emojis.json") as f:
@@ -389,8 +395,10 @@ class BotPool:
         except:
             traceback.print_exc()
 
-        if not self.config["DEFAULT_PREFIX"]:
-            self.config["DEFAULT_PREFIX"] = "!!"
+        if not config["DEFAULT_PREFIX"]:
+            config["DEFAULT_PREFIX"] = "!!"
+
+        return config
 
     def load_skins(self):
 
@@ -464,8 +472,6 @@ class BotPool:
         return skin
 
     def setup(self):
-
-        self.load_cfg()
 
         self.load_skins()
 
@@ -794,6 +800,12 @@ class BotPool:
 
                 if not bot.bot_ready:
 
+                    if bot.session is None:
+                        bot.session = aiohttp.ClientSession()
+
+                    if bot.music is None:
+                        bot.music = music_mode(bot)
+
                     if bot.initializing:
                         return
 
@@ -836,6 +848,8 @@ class BotPool:
 
         load_modules_log = True
 
+        loop = asyncio.get_event_loop()
+
         for k, v in all_tokens.items():
             load_bot(k, v, load_modules_log=load_modules_log)
             load_modules_log = False
@@ -873,10 +887,6 @@ class BotPool:
 
                 print(message)
 
-        loop = asyncio.get_event_loop()
-
-        loop.create_task(self.load_playlist_cache())
-
         if start_local:
             loop.create_task(self.start_lavalink(loop=loop))
 
@@ -886,6 +896,8 @@ class BotPool:
         self.node_check(LAVALINK_SERVERS, loop=loop, start_local=start_local)
 
         if self.config["RUN_RPC_SERVER"]:
+
+            self.playlist_cache_updater_task = loop.create_task(self.playlist_cache_updater())
 
             if not message:
 
@@ -904,7 +916,10 @@ class BotPool:
 
         else:
 
+            self.playlist_cache_updater_task = loop.create_task(self.playlist_cache_updater())
+
             loop.create_task(self.connect_rpc_ws())
+
             try:
                 loop.run_until_complete(
                     self.run_bots(self.get_all_bots())
@@ -919,7 +934,7 @@ class BotCore(commands.AutoShardedBot):
         self.session: Optional[aiohttp.ClientError] = None
         self.pool: BotPool = kwargs.pop('pool')
         self.default_prefix = kwargs.pop("default_prefix", "!!")
-        self.session = aiohttp.ClientSession()
+        self.session: Optional[aiohttp.ClientSession] = None
         self.color = kwargs.pop("embed_color", None)
         self.identifier = kwargs.pop("identifier", "")
         self.appinfo: Optional[disnake.AppInfo] = None
@@ -931,7 +946,7 @@ class BotCore(commands.AutoShardedBot):
         self.dm_cooldown = commands.CooldownMapping.from_cooldown(rate=2, per=30, type=commands.BucketType.member)
         self.number = kwargs.pop("number", 0)
         super().__init__(*args, **kwargs)
-        self.music = music_mode(self)
+        self.music: Optional[wavelink.Client] = None
         self.interaction_id: Optional[int] = None
         self.wavelink_node_reconnect_tasks = {}
 
@@ -1001,21 +1016,9 @@ class BotCore(commands.AutoShardedBot):
             id_=id_, db_name=db_name, collection="global", default_model=global_db_models
         )
 
-        if db_name == DBModel.users:
-            try:
-                self.pool.rpc_token_cache[int(id_)] = data["token"]
-            except KeyError:
-                pass
-
         return data
 
     async def update_global_data(self, id_, data: dict, *, db_name: Union[DBModel.guilds, DBModel.users]):
-
-        if db_name == DBModel.users:
-            try:
-                self.pool.rpc_token_cache[int(id_)] = data["token"]
-            except KeyError:
-                pass
 
         return await self.pool.database.update_data(
             id_=id_, data=data, db_name=db_name, collection="global", default_model=global_db_models

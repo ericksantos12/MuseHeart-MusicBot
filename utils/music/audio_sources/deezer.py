@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import re
+from typing import Optional
 
 from aiohttp import ClientSession
+from cachetools import TTLCache
 
-from utils.music.converters import fix_characters
+from utils.music.converters import fix_characters, URL_REG
 from utils.music.errors import GenericError
 from utils.music.models import PartialTrack, PartialPlaylist
 
@@ -16,6 +18,9 @@ deezer_regex = re.compile(r"(https?://)?(www\.)?deezer\.com/(?P<countrycode>[a-z
 class DeezerClient:
 
     base_url = "https://api.deezer.com"
+    
+    def __init__(self, cache: Optional[TTLCache] = None):
+        self.cache = cache or TTLCache(maxsize=700, ttl=86400)
 
     async def request(self, path: str, params: dict = None):
 
@@ -47,10 +52,55 @@ class DeezerClient:
     async def get_artist_radio_info(self, artist_id):
         return (await self.request(path=f"artist/{artist_id}/radio"))['data']
 
+    async def track_search(self, query):
+        return await self.request(path="search", params={'q': query})
+
     async def get_tracks(self, requester: int, url: str):
 
         if not (matches := deezer_regex.match(url)):
-            return
+
+            if URL_REG.match(url):
+                return
+
+            r = await self.track_search(query=url)
+
+            try:
+                tracks_result = r['data']
+            except KeyError:
+                return
+            else:
+                tracks = []
+
+                for result in tracks_result:
+                    t = PartialTrack(
+                        uri=result['link'],
+                        author=result['artist']['name'],
+                        title=result['title'],
+                        thumb=result['album']['cover_big'],
+                        duration=result['duration'] * 1000,
+                        source_name="deezer",
+                        identifier=result['id'],
+                        requester=requester
+                    )
+
+                    t.info["isrc"] = result.get('isrc')
+                    artists = result.get('contributors') or [result['artist']]
+
+                    t.info["extra"]["authors"] = [a['name'] for a in artists]
+                    t.info["extra"]["authors_md"] = ", ".join(
+                        f"[`{fix_characters(a['name'])}`](https://www.deezer.com/artist/{a['id']})" for a in
+                        artists)
+                    t.info["extra"]["artist_id"] = result['artist']['id']
+
+                    if result['title'] != result['album']['title']:
+                        t.info["extra"]["album"] = {
+                            "name": result['album']['title'],
+                            "url": result['album']['tracklist'].replace("https://api.", "https://")
+                        }
+
+                    tracks.append(t)
+
+                return tracks
 
         if url.startswith("https://deezer.page.link/"):
             async with ClientSession() as session:
@@ -86,7 +136,7 @@ class DeezerClient:
             if result['title'] != result['album']['title']:
                 t.info["extra"]["album"] = {
                     "name": result['album']['title'],
-                    "url": result['album']['tracklist']
+                    "url": result['album']['tracklist'].replace("https://api.", "https://")
                 }
 
             return [t]
@@ -101,7 +151,11 @@ class DeezerClient:
 
         if url_type == "album":
 
-            result = await self.get_album_info(url_id)
+            cache_key = f"partial:deezer:{url_type}:{url_id}"
+
+            if not (result:=self.cache.get(cache_key)):
+                result = await self.get_album_info(url_id)
+                self.cache[cache_key] = result
 
             if len(result['tracks']['data']) > 1:
                 data["playlistInfo"].update(
@@ -138,14 +192,18 @@ class DeezerClient:
                 if result['title'] != result_track['title']:
                     result_track.info["extra"]["album"] = {
                         "name": result['title'],
-                        "url": result['tracklist']
+                        "url": result['tracklist'].replace("https://api.", "https://")
                     }
 
                 return [t]
 
         elif url_type == "artist":
 
-            result = await self.get_artist_top(url_id)
+            cache_key = f"partial:deezer:{url_type}:{url_id}"
+
+            if not (result:=self.cache.get(cache_key)):
+                result = await self.get_artist_top(url_id)
+                self.cache[cache_key] = result
 
             url_id = int(url_id)
 
@@ -169,7 +227,13 @@ class DeezerClient:
             tracks_data = result['data']
 
         elif url_type == "playlist":
-            result = await self.get_playlist_info(url_id)
+
+            cache_key = f"partial:deezer:{url_type}:{url_id}"
+
+            if not (result := self.cache.get(cache_key)):
+                result = await self.get_playlist_info(url_id)
+                self.cache[cache_key] = result
+
             data["playlistInfo"]["name"] = result["title"]
             data["playlistInfo"]["thumb"] = result["picture_big"]
             tracks_data = result["tracks"]["data"]
@@ -211,7 +275,7 @@ class DeezerClient:
             if t['title'] != t['album']['title']:
                 track.info["extra"]["album"] = {
                     "name": t['album']['title'],
-                    "url": t['album']['tracklist']
+                    "url": t['album']['tracklist'].replace("https://api.", "https://")
                 }
 
             playlist.tracks.append(track)

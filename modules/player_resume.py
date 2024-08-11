@@ -359,7 +359,9 @@ class PlayerSession(commands.Cog):
         try:
             guild = self.bot.get_guild(data["_id"])
 
-            if not (db_date := data.get("time")) or (disnake.utils.utcnow() - db_date).total_seconds() > 172800:
+            db_date = data.get("time")
+
+            if not db_date or (not guild and ((disnake.utils.utcnow() - db_date)).total_seconds() > 172800):
                 print(f"{self.bot.user} - Limpando informações do player: {data['_id']}")
                 await self.delete_data(data["_id"])
                 return
@@ -583,6 +585,13 @@ class PlayerSession(commands.Cog):
             failed_tracks, playlists = self.bot.pool.process_track_cls(data.get("failed_tracks", []), playlists)
 
             player.queue.extend(failed_tracks)
+
+            if player.controller_mode is False:
+                try:
+                    await player.message.delete()
+                    player.message = None
+                except:
+                    pass
 
             if started:
                 player.set_command_log(

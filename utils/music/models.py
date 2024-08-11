@@ -12,7 +12,7 @@ from collections import deque
 from contextlib import suppress
 from itertools import cycle
 from time import time
-from typing import Optional, Union, TYPE_CHECKING, List, Dict
+from typing import Optional, Union, TYPE_CHECKING, List
 from urllib import parse
 from urllib.parse import quote
 
@@ -30,8 +30,8 @@ from wavelink import TrackStart, TrackEnd
 if TYPE_CHECKING:
     from utils.client import BotCore
 
-exclude_tags = ["remix", "edit", "extend", "compilation", "mashup"]
-exclude_tags_2 = ["extend", "compilation", "mashup", "nightcore", "8d"]
+exclude_tags = ["remix", "edit", "extend", "compilation", "mashup", "mixed"]
+exclude_tags_2 = ["extend", "compilation", "mashup", "nightcore", "8d", "mixed"]
 emoji_pattern = re.compile('<a?:.+?:\d+?>')
 
 thread_archive_time = {
@@ -584,7 +584,7 @@ class LavalinkPlayer(wavelink.Player):
         if self.bot.config["LASTFM_KEY"] and self.bot.config["LASTFM_SECRET"]:
             self.initial_hints.append(
                 f"Você pode vincular uma conta do last.fm para registrar as músicas que você ouvir por aqui na sua "
-                f"lista de músicas tocadas. Experimente usando o comando /lastfm ou {self.prefix_info}lastfm"
+                f"lista de músicas tocadas. Experimente usando o comando /lastfm ou {self.prefix_info}lastfm."
             )
 
         if hint_platforms:
@@ -776,19 +776,16 @@ class LavalinkPlayer(wavelink.Player):
 
     async def hook(self, event) -> None:
 
-        if self.is_closing:
+        """if self.is_closing:
             return
 
         event_name = str(event)
 
-        try:
-            if not self.hook_event_task[event_name].done():
-                return
-            self.hook_event_task[event_name].cancel()
-        except:
-            pass
+        if self.hook_event_task.get(event_name):
+            return
 
-        self.hook_event_task[event_name] = self.bot.loop.create_task(self.hook_events(event))
+        self.hook_event_task[event_name] = self.bot.loop.create_task(self.hook_events(event))"""
+        await self.hook_events(event)
 
     async def hook_events(self, event):
 
@@ -910,11 +907,12 @@ class LavalinkPlayer(wavelink.Player):
 
             if event.cause.startswith((
                     "java.net.SocketTimeoutException: Read timed out",
-                    "java.net.SocketException: Network is unreachable"
+                    "java.net.SocketException: Network is unreachable",
             )) \
                 or (video_not_available:=event.cause.startswith((
                 "com.sedmelluq.discord.lavaplayer.tools.FriendlyException: This video is not available",
                 "com.sedmelluq.discord.lavaplayer.tools.FriendlyException: YouTube WebM streams are currently not supported.",
+                "java.lang.IllegalStateException: Connection pool shut down",
             )) or event.message in ("Video returned by YouTube isn't what was requested", "The video returned is not what was requested.")):
                 await send_report()
 
@@ -946,23 +944,19 @@ class LavalinkPlayer(wavelink.Player):
                     await asyncio.sleep(3)
                     self.locked = False
                     await self.process_next(start_position=self.position)
+                    self.hook_event_task[str(event)] = None
 
                 else:
-                    try:
-                        self._new_node_task.cancel()
-                    except:
-                        pass
-                    self._new_node_task = self.bot.loop.create_task(self._wait_for_new_node(
-                        f"O servidor de música **{self.node.identifier}** está indisponível no momento "
-                        f"(aguardando um novo servidor ficar disponível)."))
+                    await asyncio.sleep(10)
+                    self.current = track
+                    await self.play(track=track, start=self.position)
                 return
 
             if (youtube_exception := (event.error == "This IP address has been blocked by YouTube (429)" or
                 #event.message == "Video returned by YouTube isn't what was requested" or
                 event.cause.startswith(("java.lang.RuntimeException: Not success status code: 403",
-                    "com.sedmelluq.discord.lavaplayer.tools.FriendlyException: This video is unavailable",
                     "java.io.IOException: Invalid status code for video page response: 400"))
-            )):
+            ) or event.cause == "com.sedmelluq.discord.lavaplayer.tools.FriendlyException: This video is unavailable"):
 
                 if youtube_exception and self.node.retry_403:
 
@@ -978,6 +972,7 @@ class LavalinkPlayer(wavelink.Player):
                             await asyncio.sleep(3)
                         self.locked = False
                         self.update = True
+                        self.hook_event_task[str(event)] = None
                         return
 
                     elif self.retries_403["counter"] < 3:
@@ -989,6 +984,7 @@ class LavalinkPlayer(wavelink.Player):
                             return
 
                         self.locked = False
+                        self.hook_event_task[str(event)] = None
                         self.set_command_log(
                             text=f'Ocorreu o erro 403 do youtube na reprodução da música atual. Tentativa {self.retries_403["counter"]}/5...')
                         if not self.auto_pause:
@@ -1017,6 +1013,7 @@ class LavalinkPlayer(wavelink.Player):
                     self.current = None
                     self.queue.appendleft(track)
                     self.locked = False
+                    self.hook_event_task[str(event)] = None
                     if track.info["sourceName"] == "youtube":
                         self.set_command_log(
                             text=f"Devido a restrições do youtube no servidor `{self.node.identifier}`. Durante a sessão atual "
@@ -1102,6 +1099,7 @@ class LavalinkPlayer(wavelink.Player):
             await asyncio.sleep(cooldown)
 
             self.locked = False
+            self.hook_event_task[str(event)] = None
             await self.process_next(start_position=start_position)
             return
 
@@ -1218,11 +1216,17 @@ class LavalinkPlayer(wavelink.Player):
 
         if self.last_message_id != self.text_channel.last_message_id:
 
+            def check_current_message(m: disnake.Message):
+                try:
+                    return m.id == self.message.id
+                except AttributeError:
+                    return True
+
             if isinstance(self.text_channel, disnake.Thread):
-                check = (lambda m: m.id != self.last_message_id and not not m.pinned and (
+                check = (lambda m: m.id != self.last_message_id and not not m.pinned and check_current_message(m) and (
                             not m.is_system() or m.type != disnake.MessageType.channel_name_change))
             else:
-                check = (lambda m: m.id != self.last_message_id and not m.pinned)
+                check = (lambda m: m.id != self.last_message_id and not m.pinned and check_current_message(m))
 
             try:
                 await self.text_channel.purge(check=check)
@@ -1301,7 +1305,7 @@ class LavalinkPlayer(wavelink.Player):
                 hints.append(
                     "Caso algum membro queira me usar em outro canal de voz sem precisar aguardar me "
                     f"desconectarem ou me interromperem do canal atual, há mais {bots_in_guild} bot{'s'[:bots_in_guild^1]} no servidor que "
-                    "funciona(m) com o meu mesmo sistema/comandos (usando o mesmo prefixo/comandos de barra). "
+                    f"funciona{'m'[:bots_in_guild^1]} com o meu sistema/comandos (usando o mesmo prefixo/comandos de barra). "
                     f"Experimente entrar em um canal de voz diferente do meu atual e use o comando "
                     f"{self.prefix_info}play ou /play."
                 )
@@ -1310,7 +1314,7 @@ class LavalinkPlayer(wavelink.Player):
                 hints.append(
                     "Caso algum membro queira me usar em outro canal de voz sem precisar aguardar me "
                     f"desconectarem ou me interromperem do canal atual. Dá para adicionar mais {bots_outside_guild} bot{'s'[:bots_outside_guild^1]} "
-                    f"extras no servidor atual que funciona(m) com o meu mesmo sistema/comandos (usando o mesmo "
+                    f"extras no servidor atual que funciona(m) com o mesmo sistema/comandos (usando o mesmo "
                     f"prefixo/comandos de barra). Use o comando {self.prefix_info}invite ou /invite para adicioná-los."
                 )
 
@@ -1795,9 +1799,13 @@ class LavalinkPlayer(wavelink.Player):
 
         try:
             self.idle_task.cancel()
-            self.idle_task = None
         except:
             pass
+
+        if not self.controller_mode and self.idle_task:
+            await self.message.delete()
+
+        self.idle_task = None
 
         try:
             track = self.queue.popleft()
@@ -1824,6 +1832,7 @@ class LavalinkPlayer(wavelink.Player):
                     self.idle_endtime = disnake.utils.utcnow() + datetime.timedelta(seconds=self.bot.config["IDLE_TIMEOUT"])
                     self.last_track = None
                     self.idle_task = self.bot.loop.create_task(self.idling_mode())
+                    self.bot.dispatch("player_queue_end", player=self)
                     return
 
             except Exception:
@@ -2600,12 +2609,20 @@ class LavalinkPlayer(wavelink.Player):
 
             await self.destroy_message()
 
-            if not self.static:
+            if not self.message:
+
                 try:
                     self.message = await self.text_channel.send(allowed_mentions=self.allowed_mentions,
                                                                 **data)
                 except:
                     traceback.print_exc()
+                else:
+                    if self.static:
+                        await self.channel_cleanup()
+                        data = await self.bot.get_data(self.guild_id, db_name=DBModel.guilds)
+                        data['player_controller']['channel'] = str(self.text_channel.id)
+                        data['player_controller']['message_id'] = str(self.message.id)
+                        await self.bot.update_data(self.guild_id, data, db_name=DBModel.guilds)
 
             self.start_message_updater_task()
 
@@ -2676,7 +2693,7 @@ class LavalinkPlayer(wavelink.Player):
             await self.process_rpc()
 
         if force or (interaction and not interaction.response.is_done()):
-            if self.controller_mode:
+            if self.controller_mode or interaction:
                 await self.invoke_np(interaction=interaction)
 
         else:
@@ -2795,9 +2812,9 @@ class LavalinkPlayer(wavelink.Player):
                             components=song_request_buttons
                         )
 
-                    else:
-
+                    elif self.controller_mode is True:
                         await self.destroy_message()
+
                 except Exception:
                     traceback.print_exc()
 
@@ -3048,16 +3065,14 @@ class LavalinkPlayer(wavelink.Player):
 
             stats["user"] = u
 
-            try:
-                token = self.bot.pool.rpc_token_cache[u]
-            except KeyError:
-                data = await self.bot.get_global_data(id_=u, db_name=DBModel.users)
-                token = data["token"]
+            data = await self.bot.get_global_data(id_=u, db_name=DBModel.users)
 
-            if self.bot.config["ENABLE_RPC_AUTH"] and not token:
+            if self.bot.config["ENABLE_RPC_AUTH"] and not data["token"]:
                 continue
 
-            stats["token"] = token
+            stats.update(
+                {"token": data["token"], "lastfm_user": data["lastfm"]["username"]}
+            )
 
             try:
                 await self.bot.ws_client.send(stats)

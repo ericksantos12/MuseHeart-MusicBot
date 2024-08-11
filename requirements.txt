@@ -3,7 +3,7 @@ python-dotenv
 user_agent
 requests>=2.31.0
 humanize
-motor[srv]
+motor
 tinymongo
 dnspython>=2.6.1
 psutil
@@ -11,10 +11,9 @@ aiofiles
 disnake-jishaku
 packaging
 aiosqlite
-yt-dlp>=2024.05.27
+yt-dlp>=2024.08.06
 tornado
 emoji
 urllib3>=2.1.0
 async-timeout
 cachetools
-setuptools>=70.0.0
