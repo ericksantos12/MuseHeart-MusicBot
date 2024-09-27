@@ -346,7 +346,7 @@ class Misc(commands.Cog):
                             await entry.user.send(embeds=embeds, components=components)
                             if send_video:
                                 await asyncio.sleep(1)
-                                await entry.user.send(f"{send_video}\n\nConfira o [**vídeo**]({self.bot.config['MULTIVOICE_VIDEO_DEMO_URL']}) demonstrando essa funcionalidade.")
+                                await entry.user.send(send_video)
                             return
                         except disnake.Forbidden:
                             pass
@@ -816,8 +816,7 @@ class Misc(commands.Cog):
                                             headers={"Authorization": f"Bot {bot.http.token}"}) as r:
                 data = await r.json()
 
-            user_avatar_url = f"https://cdn.discordapp.com/avatars/{user.id}/{data['user']['avatar']}." + (
-                "gif" if data['user']['avatar'].startswith('a_') else "png") + "?size=512"
+            user_avatar_url = inter.author.display_avatar.replace(static_format="png", size=512).url
 
             if user_banner_url := data['user'].get('banner'):
                 user_banner_url = f"https://cdn.discordapp.com/banners/{user.id}/{user_banner_url}." + (
@@ -932,7 +931,7 @@ class GuildLog(commands.Cog):
     @commands.Cog.listener()
     async def on_guild_remove(self, guild: disnake.Guild):
 
-        print(f"Removido do servidor: {guild.name} - [{guild.id}]")
+        print(f"😭 - Bot {self.bot.user.name} foi removido(a) do servidor: {guild.name} - [{guild.id}]")
 
         try:
             await self.bot.music.players[guild.id].destroy()
@@ -954,7 +953,7 @@ class GuildLog(commands.Cog):
     @commands.Cog.listener()
     async def on_guild_join(self, guild: disnake.Guild):
 
-        print(f"{self.bot.user.name} - Adicionado(a) no servidor: {guild.name} - [{guild.id}]")
+        print(f"🎉 - Bot {self.bot.user.name} foi adicionado(a) no servidor: {guild.name} - [{guild.id}]")
 
         try:
             guild_data = await self.bot.get_data(guild.id, db_name=DBModel.guilds)

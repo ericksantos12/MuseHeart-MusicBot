@@ -6,6 +6,7 @@ from typing import Optional
 
 from aiohttp import ClientSession
 from cachetools import TTLCache
+from rapidfuzz import fuzz
 
 from utils.music.converters import fix_characters, URL_REG
 from utils.music.errors import GenericError
@@ -55,11 +56,11 @@ class DeezerClient:
     async def track_search(self, query):
         return await self.request(path="search", params={'q': query})
 
-    async def get_tracks(self, requester: int, url: str):
+    async def get_tracks(self, requester: int, url: str, search: bool = True, check_title: bool = True):
 
         if not (matches := deezer_regex.match(url)):
 
-            if URL_REG.match(url):
+            if URL_REG.match(url) or not search:
                 return
 
             r = await self.track_search(query=url)
@@ -83,10 +84,15 @@ class DeezerClient:
                         requester=requester
                     )
 
-                    t.info["isrc"] = result.get('isrc')
                     artists = result.get('contributors') or [result['artist']]
 
                     t.info["extra"]["authors"] = [a['name'] for a in artists]
+
+                    if check_title and fuzz.token_sort_ratio(url.lower(), f"{t.authors_string} - {t.single_title}".lower()) < 80:
+                        continue
+
+                    t.info["isrc"] = result.get('isrc')
+
                     t.info["extra"]["authors_md"] = ", ".join(
                         f"[`{fix_characters(a['name'])}`](https://www.deezer.com/artist/{a['id']})" for a in
                         artists)

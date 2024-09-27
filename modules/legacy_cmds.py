@@ -167,6 +167,9 @@ class Owner(commands.Cog):
 
             if args.yml and os.path.isfile("./application.yml"):
                 os.remove("./application.yml")
+                txt = "Os arquivos Lavalink.jar e application.yml serão atualizados"
+            else:
+                txt = "O arquivo Lavalink.jar será atualizado"
 
             await self.bot.pool.start_lavalink()
 
@@ -191,8 +194,7 @@ class Owner(commands.Cog):
 
         await ctx.send(
             embed=disnake.Embed(
-                description="**O arquivo Lavalink.jar será atualizado "
-                            "e o servidor lavalink LOCAL será reiniciado.**",
+                description=f"**{txt} e o servidor lavalink LOCAL será reiniciado.**",
                 color=self.bot.get_color(ctx.guild.me)
             )
         )
@@ -213,9 +215,8 @@ class Owner(commands.Cog):
             return txt
 
     @commands.is_owner()
-    @panel_command(aliases=["rd", "recarregar"], description="Recarregar os módulos.", emoji="🔄",
-                   alt_name="Carregar/Recarregar módulos.")
-    async def reload(self, ctx: Union[CustomContext, disnake.MessageInteraction], *modules):
+    @panel_command(aliases=["rds", "recarregarskins"], description="Recarregar skins.", emoji="🎨")
+    async def reloadskins(self, ctx: Union[CustomContext, disnake.MessageInteraction]):
 
         for m in list(sys.modules):
             if not m.startswith("utils.music.skins."):
@@ -225,11 +226,24 @@ class Owner(commands.Cog):
             except:
                 continue
 
+        self.bot.pool.load_skins()
+
+        txt = "**As skins foram recarregadas com sucesso!**"
+
+        if isinstance(ctx, CustomContext):
+            embed = disnake.Embed(colour=self.bot.get_color(ctx.me), description=txt)
+            await ctx.send(embed=embed, view=self.owner_view)
+        else:
+            return txt
+
+    @commands.is_owner()
+    @panel_command(aliases=["rd", "recarregar"], description="Recarregar módulos.", emoji="🔄",
+                   alt_name="Carregar/Recarregar os módulos.")
+    async def reload(self, ctx: Union[CustomContext, disnake.MessageInteraction], *modules):
+
         modules = [f"{m.lower()}.py" for m in modules]
 
         data = {}
-
-        self.bot.pool.load_skins()
 
         for bot in (allbots:=set(self.bot.pool.get_all_bots())):
             data = bot.load_modules(modules)
@@ -321,7 +335,12 @@ class Owner(commands.Cog):
                 raise GenericError("Já estou com os ultimos updates instalados...")
 
             elif not "Fast-forward" in str(e):
-                out_git += await self.cleanup_git(force=True)
+                traceback.print_exc()
+                try:
+                    await run_command("git --work-tree=. reset --hard origin/main")
+                except:
+                    traceback.print_exc()
+                    out_git += await self.cleanup_git(force=True)
 
             elif "Need to specify how to reconcile divergent branches" in str(e):
                 out_git += await run_command("git --work-tree=. rebase --no-ff")

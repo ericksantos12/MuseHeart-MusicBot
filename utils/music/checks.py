@@ -201,6 +201,8 @@ async def check_pool_bots(inter, only_voiced: bool = False, check_player: bool =
         if not (guild := bot.get_guild(inter.guild_id)):
             continue
 
+        bot_in_guild = True
+
         if bot.user.id != inter.bot.user.id:
             extra_bots_counter += 1
 
@@ -218,6 +220,9 @@ async def check_pool_bots(inter, only_voiced: bool = False, check_player: bool =
                 continue
 
             raise NoVoice()
+
+        else:
+            user_vc = True
 
         if bot.user.id in author.voice.channel.voice_states:
 

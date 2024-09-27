@@ -17,3 +17,9 @@ emoji
 urllib3>=2.1.0
 async-timeout
 cachetools
+regex
+syncedlyrics
+pylrc
+rapidfuzz
+nodriver==0.32
+undetected-chromedriver==3.5.5

@@ -10,7 +10,6 @@ import os
 import pickle
 import subprocess
 import traceback
-import zlib
 from configparser import ConfigParser
 from copy import deepcopy
 from importlib import import_module
@@ -37,13 +36,11 @@ from utils.music.checks import check_pool_bots
 from utils.music.errors import GenericError
 from utils.music.lastfm_tools import LastFM
 from utils.music.local_lavalink import run_lavalink
-from utils.music.models import music_mode, LavalinkPlayer, LavalinkPlaylist, LavalinkTrack, PartialTrack
+from utils.music.models import music_mode, LavalinkPlayer, LavalinkPlaylist, LavalinkTrack, PartialTrack, native_sources
 from utils.music.remote_lavalink_serverlist import get_lavalink_servers
 from utils.others import CustomContext, token_regex, sort_dict_recursively
 from utils.owner_panel import PanelView
 from web_app import WSClient, start
-
-native_sources = ("http", "youtube", "soundcloud", "deezer", "tts", "reddit", "ocremix", "tiktok", "mixcloud", "soundgasm", "flowerytts", "vimeo", "twitch", "bandcamp", "local")
 
 class BotPool:
 
@@ -67,23 +64,26 @@ class BotPool:
     enqueue_playlist_embed_cooldown = commands.CooldownMapping.from_cooldown(rate=1, per=14,
                                                                                   type=commands.BucketType.user)
 
+    song_select_cooldown = commands.CooldownMapping.from_cooldown(rate=2, per=15, type=commands.BucketType.member)
+
     def __init__(self):
         self.user_prefix_cache = {}
         self.guild_prefix_cache = {}
         self.mongo_database: Optional[MongoDatabase] = None
         self.local_database: Optional[LocalDatabase] = None
         self.ws_client: Optional[WSClient] = None
+        self.emoji_data = {}
         self.config = self.load_cfg()
-        self.playlist_cache: TTLCache = self.load_playlist_cache()
+        self.playlist_cache = TTLCache(maxsize=self.config["PLAYLIST_CACHE_SIZE"], ttl=self.config["PLAYLIST_CACHE_TTL"])
+        self.partial_track_cache =  TTLCache(maxsize=1000, ttl=80400)
         self.integration_cache = TTLCache(maxsize=500, ttl=7200)
         self.spotify: Optional[SpotifyClient] = None
         self.deezer = DeezerClient(self.playlist_cache)
         self.lavalink_instance: Optional[subprocess.Popen] = None
-        self.emoji_data = {}
         self.commit = ""
         self.remote_git_url = ""
         self.max_counter: int = 0
-        self.message_ids: dict = {}
+        self.message_ids = TTLCache(ttl=30, maxsize=20000)
         self.bot_mentions = set()
         self.single_bot = True
         self.failed_bots: dict = {}
@@ -98,20 +98,24 @@ class BotPool:
         self.default_static_skin = self.config.get("DEFAULT_STATIC_SKIN", "default")
         self.default_controllerless_skin = self.config.get("DEFAULT_CONTROLLERLESS_SKIN", "default")
         self.default_idling_skin = self.config.get("DEFAULT_IDLING_SKIN", "default")
-        self.playlist_cache_updater_task: Optional[asyncio.Task] = None
+        self.cache_updater_task: Optional[asyncio.Task] = None
+
+        self.load_cache()
 
     def reset_useragent(self):
         self.current_useragent = generate_user_agent()
 
-    def load_playlist_cache(self):
+    def load_cache(self):
 
         if os.path.exists("./local_database/playlist_cache.pkl"):
             with open("./local_database/playlist_cache.pkl", 'rb') as f:
-                return pickle.load(f)
+                 self.playlist_cache.update(pickle.load(f))
 
-        return TTLCache(maxsize=self.config["PLAYLIST_CACHE_SIZE"], ttl=self.config["PLAYLIST_CACHE_TTL"])
+        if os.path.exists("./local_database/partial_track_cache.pkl"):
+            with open("./local_database/partial_track_cache.pkl", 'rb') as f:
+                 self.partial_track_cache.update(pickle.load(f))
 
-    async def playlist_cache_updater(self):
+    async def cache_updater(self):
         while True:
             await asyncio.sleep(300)
             async with aiofiles.open("./local_database/playlist_cache.pkl", 'wb') as f:
@@ -296,6 +300,9 @@ class BotPool:
                             if r.status == 200:
                                 data["info"] = await r.json()
                                 data["info"]["check_version"] = 4
+                            elif r.status == 403:
+                                print(f"❌ - Lavalink Server [{data['identifier']}] - Senha incorreta!")
+                                return
                             elif r.status != 404:
                                 raise Exception(f"❌ - [{r.status}]: {await r.text()}"[:300])
                             else:
@@ -326,7 +333,9 @@ class BotPool:
                 'identifier': 'LOCAL',
                 'region': 'us_central',
                 'retries': 120,
-                'retry_403': True,
+                'retry_403': False,
+                'prefer_youtube_native_playback': self.config["PREFER_YOUTUBE_NATIVE_PLAYBACK"],
+                'only_use_native_search_providers': self.config["ONLY_USE_NATIVE_SEARCH_PROVIDERS"],
                 'search_providers': self.config["SEARCH_PROVIDERS"].strip().split() or ["amsearch", "tdsearch", "spsearch", "ytsearch", "scsearch"]
             }
             loop.create_task(self.check_node(localnode, loop=loop))
@@ -388,7 +397,7 @@ class BotPool:
         config = load_config()
 
         try:
-            with open("emojis.json") as f:
+            with open("./emojis.json") as f:
                 self.emoji_data = json.load(f)
         except FileNotFoundError:
             pass
@@ -530,6 +539,8 @@ class BotPool:
                     value["port"] = value["port"].replace("{SERVER_PORT}", os.environ.get("SERVER_PORT") or "8090")
                     value["search"] = value.get("search", "").lower() != "false"
                     value["retry_403"] = value.get("retry_403", "").lower() == "true"
+                    value["prefer_youtube_native_playback"] = value.get("prefer_youtube_native_playback", "").lower() == "true"
+                    value["only_use_native_search_providers"] = value.get("only_use_native_search_providers", "").lower() == "true"
                     value["search_providers"] = value.get("search_providers", "").strip().split()
                     LAVALINK_SERVERS[key] = value
 
@@ -577,9 +588,9 @@ class BotPool:
             self.mongo_database = MongoDatabase(mongo_key, timeout=self.config["MONGO_TIMEOUT"],
                                                 cache_maxsize=self.config["DBCACHE_SIZE"],
                                                 cache_ttl=self.config["DBCACHE_TTL"])
-            print("Database em uso: MongoDB")
+            print("🍃 - Database em uso: MongoDB")
         else:
-            print("Database em uso: TinyMongo | Nota: Os arquivos da database serão salvos localmente na pasta: local_database")
+            print("🎲 - Database em uso: TinyMongo | Nota: Os arquivos da database serão salvos localmente na pasta: local_database")
 
         self.local_database = LocalDatabase(cache_maxsize=self.config["DBCACHE_SIZE"],
                                             cache_ttl=self.config["DBCACHE_TTL"])
@@ -595,7 +606,7 @@ class BotPool:
 
         try:
             self.commit = check_output(['git', 'rev-parse', 'HEAD']).decode('ascii').strip()
-            print(f"Commit ver: {self.commit}\n{'-' * 30}")
+            print(f"📥 - Commit ver: {self.commit}")
         except:
             self.commit = None
 
@@ -611,7 +622,8 @@ class BotPool:
 
         self.spotify = SpotifyClient(
             client_id=self.config['SPOTIFY_CLIENT_ID'],
-            client_secret=self.config['SPOTIFY_CLIENT_SECRET']
+            client_secret=self.config['SPOTIFY_CLIENT_SECRET'],
+            playlist_extra_page_limit=self.config['SPOTIFY_PLAYLIST_EXTRA_PAGE_LIMIT']
         )
 
         if self.config["LASTFM_KEY"] and self.config["LASTFM_SECRET"]:
@@ -683,25 +695,6 @@ class BotPool:
                                            "Use os comandos de barra /**", self_delete=True, delete_original=15)
 
                     return True
-
-            if not bot.pool.single_bot:
-
-                @bot.listen("on_command")
-                async def message_id_cleanup(ctx: CustomContext):
-
-                    id_ = f"{ctx.guild.id}-{ctx.channel.id}-{ctx.message.id}"
-
-                    try:
-                        ctx.bot.pool.message_ids[id_]
-                    except KeyError:
-                        return
-
-                    await asyncio.sleep(ctx.bot.config["PREFIXED_POOL_TIMEOUT"])
-
-                    try:
-                        del ctx.bot.pool.message_ids[id_]
-                    except KeyError:
-                        pass
 
             @bot.listen("on_resumed")
             async def clear_gc():
@@ -795,44 +788,41 @@ class BotPool:
                         f" - [cmd: {ctx.message.content}] {datetime.datetime.utcnow().strftime('%d/%m/%Y - %H:%M:%S')} (UTC)\n" + ("-" * 15)
                     )
 
-            @bot.listen()
+            @bot.event
             async def on_ready():
-
-                if not bot.bot_ready:
-
-                    if bot.session is None:
-                        bot.session = aiohttp.ClientSession()
-
-                    if bot.music is None:
-                        bot.music = music_mode(bot)
-
-                    if bot.initializing:
-                        return
-
-                    bot.initializing = True
-
-                    try:
-                        bot.interaction_id = bot.user.id
-
-                        bot.load_modules(load_modules_log=load_modules_log)
-
-                        bot.sync_command_cooldowns()
-
-                        if bot.config["AUTO_SYNC_COMMANDS"]:
-                            await bot.sync_app_commands(force=True)
-
-                        bot.add_view(PanelView(bot))
-
-                        self.bot_mentions.update((f"<@!{bot.user.id}>", f"<@{bot.user.id}>"))
-
-                    except Exception:
-                        traceback.print_exc()
-
-                    await bot.update_appinfo()
-
-                    bot.bot_ready = True
-
                 print(f'🟢 - {bot.user} - [{bot.user.id}] Online.')
+
+            async def initial_setup():
+
+                await bot.wait_until_ready()
+
+                if bot.session is None:
+                    bot.session = aiohttp.ClientSession()
+
+                bot.music.session = bot.session
+
+                try:
+                    bot.interaction_id = bot.user.id
+
+                    bot.load_modules(load_modules_log=load_modules_log)
+
+                    bot.sync_command_cooldowns()
+
+                    if bot.config["AUTO_SYNC_COMMANDS"]:
+                        await bot.sync_app_commands(force=True)
+
+                    bot.add_view(PanelView(bot))
+
+                    self.bot_mentions.update((f"<@!{bot.user.id}>", f"<@{bot.user.id}>"))
+
+                except Exception:
+                    traceback.print_exc()
+
+                await bot.update_appinfo()
+
+                bot.bot_ready = True
+
+            bot.loop.create_task(initial_setup())
 
             if guild_id:
                 bot.exclusive_guild_id = int(guild_id)
@@ -871,9 +861,7 @@ class BotPool:
 
         if not self.bots:
 
-            os.system('cls' if os.name == 'nt' else 'clear')
-
-            message = "O token do bot não foi configurado devidamente!\n\n"
+            message = "O token do bot não foi configurado devidamente!"
 
             if os.environ.get("REPL_SLUG"):
                 message += f"Confira se o token foi adicionado nas secrets da replit"
@@ -883,21 +871,25 @@ class BotPool:
                 message += f'. <a href="https://gist.github.com/zRitsu/70737984cbe163f890dae05a80a3ddbe#2---com-o-projeto-j%C3%A1-criado-prossiga-as-etapas-abaixo" target="_blank">Clique aqui</a> para ver o guia de como configurar.'
 
             else:
-                message += "Confira se o token foi configurado na ENV/ENVIRONMENT ou no arquivo .env"
+                message += " Confira se o token foi configurado na ENV/ENVIRONMENT ou no arquivo .env"
 
-                print(message)
+                print(f"⚠️ - {message}")
 
-        if start_local:
-            loop.create_task(self.start_lavalink(loop=loop))
+            message = f"\n\n{message}"
 
-        if not self.spotify.spotify_cache:
-            loop.create_task(self.spotify.get_access_token())
+        else:
 
-        self.node_check(LAVALINK_SERVERS, loop=loop, start_local=start_local)
+            if start_local:
+                loop.create_task(self.start_lavalink(loop=loop))
+
+            if not self.spotify.spotify_cache:
+                loop.create_task(self.spotify.get_access_token())
+
+            self.node_check(LAVALINK_SERVERS, loop=loop, start_local=start_local)
 
         if self.config["RUN_RPC_SERVER"]:
 
-            self.playlist_cache_updater_task = loop.create_task(self.playlist_cache_updater())
+            self.cache_updater_task = loop.create_task(self.cache_updater())
 
             if not message:
 
@@ -916,7 +908,7 @@ class BotPool:
 
         else:
 
-            self.playlist_cache_updater_task = loop.create_task(self.playlist_cache_updater())
+            self.cache_updater_task = loop.create_task(self.cache_updater())
 
             loop.create_task(self.connect_rpc_ws())
 
@@ -940,13 +932,12 @@ class BotCore(commands.AutoShardedBot):
         self.appinfo: Optional[disnake.AppInfo] = None
         self.exclusive_guild_id: Optional[int] = None
         self.bot_ready = False
-        self.initializing = False
         self.uptime = disnake.utils.utcnow()
         self.env_owner_ids = set()
         self.dm_cooldown = commands.CooldownMapping.from_cooldown(rate=2, per=30, type=commands.BucketType.member)
         self.number = kwargs.pop("number", 0)
         super().__init__(*args, **kwargs)
-        self.music: Optional[wavelink.Client] = None
+        self.music: wavelink.Client = music_mode(self)
         self.interaction_id: Optional[int] = None
         self.wavelink_node_reconnect_tasks = {}
 
@@ -1088,6 +1079,7 @@ class BotCore(commands.AutoShardedBot):
                 cmd.ignore_extra = False
                 if cmd.extras.get("exclusive_cooldown"): continue
                 c = self.get_command(cmd.name)
+                if not c: continue
                 c.ignore_extra = False
                 if self.pool.config["ENABLE_COMMANDS_COOLDOWN"] is False:
                     c._buckets._cooldown = None
@@ -1218,7 +1210,7 @@ class BotCore(commands.AutoShardedBot):
                 try:
                     await play_cmd.callback(
                         inter=ctx, query=query, self=play_cmd.cog, position=0, options=False, force_play="no",
-                        manual_selection=False, repeat_amount=0, server=None
+                        manual_selection=False, server=None
                     )
                 except Exception as e:
                     self.dispatch("command_error", ctx, e)
@@ -1373,30 +1365,26 @@ class BotCore(commands.AutoShardedBot):
                     try:
                         self.reload_extension(module_filename)
                         if not self.bot_ready and load_modules_log:
-                            print(f"{'=' * 48}\n🟦 - {bot_name} - {filename}.py Recarregado.")
+                            print(f"🟦 - {bot_name} - {filename}.py Recarregado.")
                         load_status["reloaded"].append(f"{filename}.py")
                     except (commands.ExtensionAlreadyLoaded, commands.ExtensionNotLoaded):
                         try:
                             self.load_extension(module_filename)
                             if not self.bot_ready and load_modules_log:
-                                print(f"{'=' * 48}\n🟩 - {bot_name} - {filename}.py Carregado.")
+                                print(f"🟩 - {bot_name} - {filename}.py Carregado.")
                             load_status["loaded"].append(f"{filename}.py")
                         except Exception as e:
-                            print(f"{'=' * 48}\n❌- {bot_name} - Falha ao carregar/recarregar o módulo: {filename}\n")
+                            print(f"❌- {bot_name} - Falha ao carregar/recarregar o módulo: {filename}")
                             if not self.bot_ready:
                                 raise e
                             load_status["failed"].append(f"{filename}.py")
                             traceback.print_exc()
                     except Exception as e:
-                        print(f"{'=' * 48}\n\❌ - {bot_name} - Falha ao carregar/recarregar o módulo: {filename}")
+                        print(f"❌ - {bot_name} - Falha ao carregar/recarregar o módulo: {filename}")
                         if not self.bot_ready:
                             raise e
                         load_status["failed"].append(f"{filename}.py")
                         traceback.print_exc()
-
-
-        if not self.bot_ready:
-            print(f"{'=' * 48}")
 
         if not self.config["ENABLE_DISCORD_URLS_PLAYBACK"]:
             self.remove_slash_command("play_music_file")

@@ -413,16 +413,95 @@ class QueueInteraction(disnake.ui.View):
 
         return True
 
+class EmbedPaginatorInteraction(disnake.ui.View):
+    def __init__(self, user: disnake.Member, embeds: List[disnake.Embed], *, timeout=180, max_itens=25):
+        super().__init__(timeout=timeout)
+        self.user = user
+        self.current_page = 0
+        self.max_page = len(embeds)-1
+        self.inter: Optional[disnake.MessageInteraction] = None
+        self.embeds = embeds
+        self.load_components()
+
+    async def interaction_check(self, interaction: disnake.MessageInteraction) -> bool:
+
+        if interaction.user.id == self.user.id:
+            return True
+
+        await interaction.send(f"Apenas {self.user.mention} pode interagir aqui.", ephemeral = True)
+
+    def load_components(self):
+
+        self.clear_items()
+
+        back_button = disnake.ui.Button(emoji="⬅")
+        if self.current_page == 0:
+            back_button.disabled = True
+        else:
+            back_button.label = str(self.current_page)
+        back_button.callback = self.back_callback
+        self.add_item(back_button)
+
+        next_button = disnake.ui.Button(emoji="➡")
+        if self.current_page == self.max_page:
+            next_button.disabled = True
+            next_button.label = f"{self.current_page + 1} / {self.max_page + 1}"
+        else:
+            next_button.label = f"{self.current_page + 2} / {self.max_page + 1}"
+        next_button.callback = self.next_callback
+        self.add_item(next_button)
+
+        button = disnake.ui.Button(label="Fechar", emoji="❌")
+        button.callback = self.cancel_callback
+        self.add_item(button)
+
+    async def back_callback(self, interaction: disnake.MessageInteraction):
+        self.inter = interaction
+        if self.current_page == 0:
+            self.current_page = self.max_page
+        else:
+            self.current_page -= 1
+        self.load_components()
+        kwargs = {}
+        if self.embeds:
+            kwargs["embed"] = self.embeds[self.current_page]
+        await interaction.response.edit_message(view=self, **kwargs)
+
+    async def next_callback(self, interaction: disnake.MessageInteraction):
+        self.inter = interaction
+        if self.current_page == self.max_page:
+            self.current_page = 0
+        else:
+            self.current_page += 1
+        self.load_components()
+        kwargs = {}
+        if self.embeds:
+            kwargs["embed"] = self.embeds[self.current_page]
+        await interaction.response.edit_message(view=self, **kwargs)
+
+    async def cancel_callback(self, interaction: disnake.MessageInteraction):
+        self.inter = interaction
+        self.selected = False
+        self.inter = interaction
+        self.stop()
+
+    async def callback(self, interaction: disnake.MessageInteraction):
+        self.selected = interaction.data.values[0]
+        self.inter = interaction
+        self.stop()
+
+
 class SelectInteraction(disnake.ui.View):
 
-    def __init__(self, user: disnake.Member, opts: List[disnake.SelectOption], *, timeout=180):
+    def __init__(self, user: disnake.Member, opts: List[disnake.SelectOption], *, timeout=180, max_itens=25):
         super().__init__(timeout=timeout)
         self.user = user
         self.selected = None
-        self.item_pages = list(disnake.utils.as_chunks(opts, 25))
+        self.item_pages = list(disnake.utils.as_chunks(opts, max_itens))
         self.current_page = 0
         self.max_page = len(self.item_pages)-1
         self.inter = None
+        self.embeds = []
 
         self.load_components()
 
@@ -438,10 +517,19 @@ class SelectInteraction(disnake.ui.View):
         if len(self.item_pages) > 1:
 
             back_button = disnake.ui.Button(emoji="⬅")
+            if self.current_page == 0:
+                back_button.disabled = True
+            else:
+                back_button.label = str(self.current_page)
             back_button.callback = self.back_callback
             self.add_item(back_button)
 
             next_button = disnake.ui.Button(emoji="➡")
+            if self.current_page == self.max_page:
+                next_button.disabled = True
+                next_button.label = f"{self.current_page + 1} / {self.max_page + 1}"
+            else:
+                next_button.label = f"{self.current_page + 2} / {self.max_page + 1}"
             next_button.callback = self.next_callback
             self.add_item(next_button)
 
@@ -462,15 +550,21 @@ class SelectInteraction(disnake.ui.View):
         else:
             self.current_page -= 1
         self.load_components()
-        await interaction.response.edit_message(view=self)
+        kwargs = {}
+        if self.embeds:
+            kwargs["embed"] = self.embeds[self.current_page]
+        await interaction.response.edit_message(view=self, **kwargs)
 
     async def next_callback(self, interaction: disnake.MessageInteraction):
-        if self.current_page == self.max_page:
+        if self.current_page >= self.max_page:
             self.current_page = 0
         else:
             self.current_page += 1
         self.load_components()
-        await interaction.response.edit_message(view=self)
+        kwargs = {}
+        if self.embeds:
+            kwargs["embed"] = self.embeds[self.current_page]
+        await interaction.response.edit_message(view=self, **kwargs)
 
     async def cancel_callback(self, interaction: disnake.MessageInteraction):
         self.selected = False
@@ -1075,7 +1169,8 @@ class FavModalAdd(disnake.ui.Modal):
                     )
                     return
 
-                data = {"title": f"[SP]: {result['display_name'][:90]}", "url": result["external_urls"]["spotify"]}
+                data = {"title": f"[SP]: {result['display_name'][:90]}", "url": result["external_urls"]["spotify"],
+                        "avatar": result["images"][-1]['url']}
 
             elif (matches:=deezer_regex.match(url)):
 
@@ -1103,7 +1198,7 @@ class FavModalAdd(disnake.ui.Modal):
                     traceback.print_exc()
                     return
 
-                data = {"title": f"[DZ]: {result['name'][:90]}", "url": result['link']}
+                data = {"title": f"[DZ]: {result['name'][:90]}", "url": result['link'], "avatar": result["picture"]}
 
             else:
 
@@ -1174,7 +1269,12 @@ class FavModalAdd(disnake.ui.Modal):
 
             title = fix_characters(data['title'], 80)
 
-            self.view.data["integration_links"][title] = data['url']
+            self.view.data["integration_links"][title] = {"url": data['url']}
+
+            try:
+                self.view.data["integration_links"][title]["avatar"] = data["avatar"]
+            except KeyError:
+                pass
 
             await self.view.bot.update_global_data(inter.author.id, self.view.data, db_name=DBModel.users)
 
@@ -1194,12 +1294,12 @@ class FavModalAdd(disnake.ui.Modal):
                 ), view=None
             )
 
-            self.view.log = f"[`{data['title']}`]({data['url']}) foi adicionado nas suas integrações."
+            self.view.log = f"[`{data['title']}`](<{data['url']}>) foi adicionado nas suas integrações."
 
         if not isinstance(self.view.ctx, CustomContext):
-            await self.view.ctx.edit_original_message(embed=self.view.build_embed(), view=self.view)
+            await self.view.ctx.edit_original_message(content=self.view.build_txt(), view=self.view)
         elif self.view.message:
-            await self.view.message.edit(embed=self.view.build_embed(), view=self.view)
+            await self.view.message.edit(content=self.view.build_txt(), view=self.view)
 
 class FavMenuView(disnake.ui.View):
 
@@ -1304,11 +1404,13 @@ class FavMenuView(disnake.ui.View):
             if self.data["integration_links"]:
                 opts = []
                 for k, v in list(self.data["integration_links"].items())[:25]: # TODO: Lidar depois com os dados existentes que excedem a quantidade permitida
+                    if isinstance(v, dict):
+                        v = v["url"]
                     emoji, platform = music_source_emoji_url(v)
                     opts.append(disnake.SelectOption(label=k[5:], emoji=emoji, description=platform, value=k))
                 integration_select = disnake.ui.Select(options=opts, min_values=1, max_values=1)
                 integration_select.options[0].default = True
-                self.current = integration_select.options[0].label
+                self.current = integration_select.options[0].value
                 integration_select.callback = self.select_callback
                 self.add_item(integration_select)
 
@@ -1392,7 +1494,7 @@ class FavMenuView(disnake.ui.View):
 
             user, data, url = await self.bot.wait_for("fav_add", check=lambda user, data, url: user.id == self.ctx.author.id)
 
-            self.log = f"{url} foi adicionado nos seus favoritos."
+            self.log = f"<{url}> foi adicionado nos seus favoritos."
 
             if not isinstance(self.ctx, CustomContext):
                 await self.ctx.edit_original_message(content=self.build_txt(), view=self)
@@ -1462,8 +1564,8 @@ class FavMenuView(disnake.ui.View):
                     name, url = data
                     e = get_source_emoji_cfg(self.bot, url)
                     if e:
-                        return f"` {index:02} ` {e} [`{name}`](<{url}>)"
-                    return f"` {index:02} ` [`{name}`](<{url}>)"
+                        return f"` {index:02} ` {e} [`{fix_characters(name, 45)}`](<{url}>)"
+                    return f"` {index:02} ` [`{fix_characters(name, 45)}`](<{url}>)"
 
                 txt += "\n".join(
                     f"> {format_fav(n+1, d)}" for n, d in enumerate(islice(self.data["fav_links"].items(), 25))
@@ -1488,8 +1590,8 @@ class FavMenuView(disnake.ui.View):
                     name, data = data
                     e = get_source_emoji_cfg(self.bot, data['url'])
                     if e:
-                        return f"` {index:02} ` {e} [`{name}`](<{data['url']}>)"
-                    return f"` {index:02} ` [`{name}`](<{data['url']}>)"
+                        return f"` {index:02} ` {e} [`{fix_characters(name, 45)}`](<{data['url']}>)"
+                    return f"` {index:02} ` [`{fix_characters(name, 45)}`](<{data['url']}>)"
 
                 txt += f"**Links atuais no bot {self.bot.user.mention}:**\n" + "\n".join(
                     f"> {format_gfav(n+1, d)}" for n, d in enumerate(islice(self.guild_data["player_controller"]["fav_links"].items(), 25))
@@ -1509,10 +1611,12 @@ class FavMenuView(disnake.ui.View):
             else:
                 def format_itg(bot, index, data):
                     name, url = data
+                    if isinstance(url, dict):
+                        url = url["url"]
                     e = get_source_emoji_cfg(bot, url)
                     if e:
-                        return f"` {index:02} ` {e} [`{name[5:]}`](<{url}>)"
-                    return f"` {index:02} ` [`{name}`](<{url}>)"
+                        return f"` {index:02} ` {e} [`{fix_characters(name[5:], 45)}`](<{url}>)"
+                    return f"` {index:02} ` [`{fix_characters(name, 45)}`](<{url}>)"
 
                 txt += f"### Suas integrações atuais:\n" + "\n".join(
                     f"> {format_itg(self.bot, n+1, d)}" for n, d in enumerate(islice(self.data["integration_links"].items(), 25)))
@@ -1629,8 +1733,14 @@ class FavMenuView(disnake.ui.View):
             self.log = f"Link {url} foi removido com sucesso da lista de favoritos do servidor!"
 
         elif self.mode == ViewMode.integrations_manager:
+
+            item = self.data["integration_links"][self.current]
+
+            if isinstance(inter, dict):
+                item = item['url']
+
             try:
-                url = f'[`{self.current}`]({self.data["integration_links"][self.current]})'
+                url = f'[`{self.current}`]({item})'
                 del self.data["integration_links"][self.current]
             except:
                 await inter.send(f"**Não há integração na lista com o nome:** {self.current}", ephemeral=True)
@@ -1822,12 +1932,7 @@ class FavMenuView(disnake.ui.View):
         except:
             pass
 
-        await inter.response.edit_message(
-            embed=disnake.Embed(
-                description="**Gerenciador fechado.**",
-                color=self.bot.get_color(),
-            ), view=None
-        )
+        await inter.response.edit_message(content="**Gerenciador fechado.**", view=None)
         self.stop()
 
     async def mode_callback(self, inter: disnake.MessageInteraction):

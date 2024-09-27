@@ -120,7 +120,6 @@ class Track:
                  'ytid',
                  'length',
                  'duration',
-                 'uri',
                  'author',
                  'is_stream',
                  'dead')
@@ -136,7 +135,6 @@ class Track:
         self.ytid = self.identifier if re.match(r"^[a-zA-Z0-9_-]{11}$", self.identifier) else None
         self.length = info.get('length')
         self.duration = self.length
-        self.uri = info.get('uri')
         self.author = info.get('author', '')[:97]
 
         if self.ytid:
@@ -155,6 +153,13 @@ class Track:
     @property
     def thumb(self):
         return self.info["artworkUrl"]
+
+    @property
+    def uri(self):
+        try:
+            return self.info['uri']
+        except KeyError:
+            return ""
 
     @property
     def is_dead(self):

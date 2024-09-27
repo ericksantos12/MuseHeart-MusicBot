@@ -27,9 +27,11 @@ import json
 import logging
 import os
 import re
+import traceback
 from typing import Any, Callable, Dict, Optional, Union, List
 from urllib.parse import quote
 
+from utils.music.youtube_trusted_session_generator import Browser
 from .backoff import ExponentialBackoff
 from .errors import *
 from .player import Player, Track, TrackPlaylist
@@ -119,6 +121,11 @@ class Node:
         self.info = {"sourceManagers": []}
         self.plugin_names: Optional[List] = None
         self.max_retries = kwargs.pop("max_retries", 1)
+        self.only_use_native_search_providers = kwargs.pop("only_use_native_search_providers", False)
+        self.search_providers = []
+        self.partial_providers = []
+        self.original_providers = []
+        self.native_sources = kwargs.pop("native_sources", set())
 
         self._closing = False
         self._is_connecting = False
@@ -240,6 +247,31 @@ class Node:
 
         __log__.info(f'NODE | {self.identifier} connected:: {self.__repr__()}')
 
+    async def refresh_potoken(self, sandbox=True, browser_executable_path=None):
+
+        browser = Browser()
+
+        try:
+            ytid = self._client.bot.config["POTOKEN_YTID"]
+        except:
+            ytid = "jNQXAC9IVRw"
+
+        try:
+            await browser.start(sandbox=sandbox, browser_executable_path=browser_executable_path, ytid=ytid)
+        except Exception as e:
+            if not browser.data:
+                raise e
+            else:
+                traceback.print_exc()
+
+        async with self.session.post(url=f"{self.rest_uri}/youtube",
+            json={
+              "poToken": browser.data["po_token"],
+              "visitorData": browser.data["visitor_data"]
+            }, headers=self._websocket.headers
+        ) as r:
+            return f"{r.status}: {await r.text()}"
+
     async def update_player(self, guild_id: int, data: dict, replace: bool = False):
 
         if not self.session_id:
@@ -349,6 +381,8 @@ class Node:
                     if isinstance(data, list):
                         return data
 
+                    break
+
         loadtype = data.get('loadType')
 
         try:
@@ -418,11 +452,9 @@ class Node:
 
         track_cls = kwargs.pop('track_cls', Track)
 
-        tracks = [
+        return [
             track_cls(id_=track[encoded_name], info=track['info'], pluginInfo=track.get("pluginInfo", {}), **kwargs) for
             track in tracks]
-
-        return tracks
 
         __log__.warning(f'REST | {self.identifier} | Failure to load tracks after 5 attempts.')
 
@@ -464,7 +496,7 @@ class Node:
         if self.version < 4:
             return
 
-        return "java-lyrics-plugin" in self.plugin_names
+        return "lyrics" in self.plugin_names
 
     async def fetch_ytm_lyrics(self, ytid: str):
 
@@ -472,9 +504,8 @@ class Node:
             raise Exception(f"Lyrics plugin not available on Node: {self.identifier}")
 
         async with self.session.get(f"{self.rest_uri}/v4/lyrics/{ytid}", headers=self.headers) as r:
-            if r.status != 200:
-                print(f"Lyrics fetching failed: {r.status} - {await r.text()}")
-                return
+            if r.status not in (200, 404):
+                r.raise_for_status()
             return await r.json()
 
     def get_player(self, guild_id: int) -> Optional[Player]:

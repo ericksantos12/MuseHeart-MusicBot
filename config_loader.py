@@ -68,13 +68,16 @@ DEFAULT_CONFIG = {
     "ENABLE_DEFER_TYPING": True,
     "VOICE_CHANNEL_LATENCY_RECONNECT": 200,
     "PLAYLIST_CACHE_SIZE": 500,
-    "PLAYLIST_CACHE_TTL": 21600,
+    "PLAYLIST_CACHE_TTL": 1800,
+    "USE_YTM_TRACKINFO_SCROBBLE": False,
+    "PARTIALTRACK_FIRST": False,
 
     ##############################################
     ### Sistema de música - Suporte ao spotify ###
     ##############################################
     "SPOTIFY_CLIENT_ID": '',
     "SPOTIFY_CLIENT_SECRET": '',
+    "SPOTIFY_PLAYLIST_EXTRA_PAGE_LIMIT": 0,
 
     ################################################
     ### Sistema de música - RPC (Rich Presence): ###
@@ -98,6 +101,8 @@ DEFAULT_CONFIG = {
     "LAVALINK_CPU_CORES": 2,
     "LAVALINK_FILE_URL": "https://github.com/zRitsu/LL-binaries/releases/download/0.0.1/Lavalink.jar",
     "SEARCH_PROVIDERS": "scsearch",
+    "PREFER_YOUTUBE_NATIVE_PLAYBACK": True,
+    "ONLY_USE_NATIVE_SEARCH_PROVIDERS": True,
 
     ##################################################
     ### Sistema de música - Integração com Last.fm ###
@@ -208,6 +213,7 @@ def load_config():
         "DBCACHE_TTL",
         "PLAYLIST_CACHE_SIZE",
         "PLAYLIST_CACHE_TTL",
+        "SPOTIFY_PLAYLIST_EXTRA_PAGE_LIMIT",
     ]:
         try:
             new_value = int(CONFIG[i])
@@ -256,6 +262,10 @@ def load_config():
         "MESSAGE_CONTENT_INTENT",
 
         "USE_YTDL",
+        "PREFER_YOUTUBE_NATIVE_PLAYBACK",
+        "ONLY_USE_NATIVE_SEARCH_PROVIDERS",
+        "USE_YTM_TRACKINFO_SCROBBLE",
+        "PARTIALTRACK_FIRST",
         "FORCE_USE_DEEZER_CLIENT",
         "SILENT_PUBLICBOT_WARNING",
     ]:

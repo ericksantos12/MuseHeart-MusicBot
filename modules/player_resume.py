@@ -180,7 +180,8 @@ class PlayerSession(commands.Cog):
             "prefix_info": player.prefix_info,
             "voice_state": player._voice_state,
             "time": disnake.utils.utcnow(),
-            "lastfm_artists": player.lastfm_artists
+            "lastfm_artists": player.lastfm_artists,
+            "start_timestamp": player.start_timestamp
         }
 
         try:
@@ -341,6 +342,9 @@ class PlayerSession(commands.Cog):
 
         if isinstance(voice_channel, disnake.StageChannel) and \
                 voice_channel.permissions_for(guild.me).mute_members:
+
+            while not guild.me.voice:
+                await asyncio.sleep(1)
 
             await asyncio.sleep(3)
 
@@ -537,6 +541,9 @@ class PlayerSession(commands.Cog):
                 except KeyError:
                     pass
 
+                if start_timestamp:=data.get("start_timestamp"):
+                    player.start_timestamp = start_timestamp
+
                 try:
                     player.mini_queue_enabled = data["mini_queue_enabled"]
                 except:
@@ -639,6 +646,8 @@ class PlayerSession(commands.Cog):
                         await player.process_next(start_position=start_position)
                         if pause:
                             await player.set_pause(True)
+                            if not check:
+                                player.members_timeout_task = player.bot.loop.create_task(player.members_timeout(check=False))
 
                     player._session_resuming = False
                 except Exception:
