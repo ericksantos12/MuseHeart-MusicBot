@@ -11,7 +11,7 @@ aiofiles
 disnake-jishaku
 packaging
 aiosqlite
-yt-dlp>=2024.08.06
+yt-dlp>=2024.11.4
 tornado
 emoji
 urllib3>=2.1.0
@@ -23,3 +23,6 @@ pylrc
 rapidfuzz
 nodriver==0.32
 undetected-chromedriver==3.5.5
+g4f>=0.3.3.3
+nest_asyncio
+audioop-lts; python_version>='3.13'

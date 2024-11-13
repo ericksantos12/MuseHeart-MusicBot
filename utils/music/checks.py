@@ -8,6 +8,7 @@ from typing import Union, Optional, TYPE_CHECKING
 import disnake
 from disnake.ext import commands
 
+import wavelink
 from utils.db import DBModel
 from utils.music.converters import time_format
 from utils.music.errors import NoVoice, NoPlayer, NoSource, NotRequester, NotDJorStaff, \
@@ -340,7 +341,7 @@ async def check_pool_bots(inter, only_voiced: bool = False, check_player: bool =
 
     raise PoolException()
 
-def has_player():
+def has_player(check_node = True):
 
     async def predicate(inter):
 
@@ -350,9 +351,12 @@ def has_player():
             bot = inter.bot
 
         try:
-            bot.music.players[inter.guild_id]
+            player = bot.music.players[inter.guild_id]
         except KeyError:
             raise NoPlayer()
+
+        if check_node and not player.node.is_available:
+            raise wavelink.ZeroConnectedNodes()
 
         return True
 
@@ -533,6 +537,9 @@ def check_stage_topic():
         except KeyError:
             raise NoPlayer()
 
+        if not player.guild.me.voice:
+            raise NoPlayer()
+
         time_limit = 30 if isinstance(player.guild.me.voice.channel, disnake.VoiceChannel) else 120
 
         if player.stage_title_event and (time_:=int((disnake.utils.utcnow() - player.start_time).total_seconds())) < time_limit and not (await bot.is_owner(inter.author)):
@@ -540,6 +547,28 @@ def check_stage_topic():
                 f"**Você terá que aguardar {time_format((time_limit - time_) * 1000, use_names=True)} para usar essa função "
                 f"com o anúncio automático do palco ativo...**"
             )
+
+        return True
+
+    return commands.check(predicate)
+
+def check_yt_cooldown():
+
+    def predicate(inter):
+
+        try:
+            bot = inter.music_bot
+        except AttributeError:
+            bot = inter.bot
+
+        try:
+            player: LavalinkPlayer = bot.music.players[inter.guild_id]
+        except KeyError:
+            return True
+
+        if player.current and player.current.info["sourceName"] == "youtube" and player.native_yt and (remaining:=(disnake.utils.utcnow() - player.start_time).total_seconds()) < bot.config["YOUTUBE_TRACK_COOLDOWN"]:
+            raise GenericError("**Você só pode pular a música atual do youtube em {}**.\n"
+                               "-# Isso é uma forma de ajudar a evitar possíveis bloqueios do youtube na reprodução da música".format(time_format((bot.config["YOUTUBE_TRACK_COOLDOWN"] - int(remaining))*1000, use_names=True)))
 
         return True
 
@@ -573,6 +602,9 @@ async def check_player_perm(inter, bot: BotCore, channel, guild_data: dict = Non
         vc = player.guild.me.voice.channel
     except AttributeError:
         vc = player.last_channel
+
+    if not isinstance(inter.guild, disnake.Guild):
+        inter.author = player.guild.get_member(inter.author.id)
 
     if inter.author.guild_permissions.manage_channels:
         return True

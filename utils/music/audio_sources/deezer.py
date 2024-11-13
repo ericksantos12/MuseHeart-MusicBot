@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 from typing import Optional
+from urllib.parse import quote
 
 from aiohttp import ClientSession
 from cachetools import TTLCache
@@ -54,7 +55,7 @@ class DeezerClient:
         return (await self.request(path=f"artist/{artist_id}/radio"))['data']
 
     async def track_search(self, query):
-        return await self.request(path="search", params={'q': query})
+        return await self.request(path="search", params={'q': quote(query)})
 
     async def get_tracks(self, requester: int, url: str, search: bool = True, check_title: bool = True):
 

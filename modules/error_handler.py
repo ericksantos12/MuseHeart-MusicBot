@@ -148,7 +148,7 @@ class ErrorHandler(commands.Cog):
 
             await self.send_webhook(
                 embed=self.build_report_embed(inter),
-                file=string_to_file(full_error_msg, "error_traceback_interaction.txt")
+                file=string_to_file(full_error_msg or error_msg, "error_traceback_interaction.txt")
             )
 
             await asyncio.sleep(20)
@@ -202,7 +202,12 @@ class ErrorHandler(commands.Cog):
             print(f"{ctx.author} [{ctx.author.id}] não é dono do bot para usar o comando: {ctx.command.name}")
             return
 
-        if isinstance(error, commands.MissingPermissions) and (await ctx.bot.is_owner(ctx.author)):
+        try:
+            bot = ctx.bot
+        except AttributeError:
+            bot = self.bot
+
+        if isinstance(error, commands.MissingPermissions) and (await bot.is_owner(ctx.author)):
             try:
                 await ctx.reinvoke()
             except Exception as e:
@@ -298,7 +303,7 @@ class ErrorHandler(commands.Cog):
 
             await self.send_webhook(
                 embed=self.build_report_embed(ctx),
-                file=string_to_file(full_error_msg, "error_traceback_prefixed.txt")
+                file=string_to_file(full_error_msg or error_msg, "error_traceback_prefixed.txt")
             )
 
             await asyncio.sleep(20)
@@ -406,8 +411,13 @@ class ErrorHandler(commands.Cog):
             timestamp=disnake.utils.utcnow()
         )
 
+        try:
+            bot = ctx.bot
+        except AttributeError:
+            bot = self.bot
+
         if ctx.guild:
-            embed.colour = ctx.bot.get_color(ctx.guild.me)
+            embed.colour = bot.get_color(ctx.guild.me)
             embed.add_field(
                 name="Servidor:", inline=False,
                 value=f"```\n{disnake.utils.escape_markdown(ctx.guild.name)}\nID: {ctx.guild.id}```"
@@ -490,7 +500,6 @@ class ErrorHandler(commands.Cog):
         async with ClientSession() as session:
             webhook = disnake.Webhook.from_url(self.bot.config["AUTO_ERROR_REPORT_WEBHOOK"], session=session)
             await webhook.send(**kwargs)
-
 
 def setup(bot: BotCore):
     bot.add_cog(ErrorHandler(bot))

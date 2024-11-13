@@ -190,6 +190,16 @@ class PlayerSession(commands.Cog):
             player._last_channel_id = vc_id
             data["last_voice_channel_id"] = vc_id
 
+        try:
+            data["live_lyrics_status"] = player.live_lyrics_enabled
+        except AttributeError:
+            pass
+
+        try:
+            data["command_log_list"] = player.command_log_list
+        except AttributeError:
+            pass
+
         if player.static:
             if player.skin_static.startswith("> custom_skin: "):
                 custom_skin = player.skin_static[15:]
@@ -541,6 +551,8 @@ class PlayerSession(commands.Cog):
                 except KeyError:
                     pass
 
+                player.live_lyrics_enabled = data.get("live_lyrics_status", False)
+
                 if start_timestamp:=data.get("start_timestamp"):
                     player.start_timestamp = start_timestamp
 
@@ -554,6 +566,8 @@ class PlayerSession(commands.Cog):
                 player.stage_title_event = data.get("stage_title_event", False)
 
                 player.listen_along_invite = data.pop("listen_along_invite", "")
+
+                player.command_log_list.extend(data.pop("command_log_list", []))
 
                 player.dj = set(data["dj"])
                 player.loop = data["loop"]
@@ -647,7 +661,7 @@ class PlayerSession(commands.Cog):
                         if pause:
                             await player.set_pause(True)
                             if not check:
-                                player.members_timeout_task = player.bot.loop.create_task(player.members_timeout(check=False))
+                                player.start_members_timeout(check=False)
 
                     player._session_resuming = False
                 except Exception:

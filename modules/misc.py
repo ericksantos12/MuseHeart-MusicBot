@@ -801,12 +801,12 @@ class Misc(commands.Cog):
                 break
 
         if not guild:
-            user = await bot.fetch_user(inter.author.id)
+            user = await bot.fetch_user(user.id)
 
-            user_avatar_url = inter.author.display_avatar.replace(static_format="png", size=512).url
+            user_avatar_url = user.display_avatar.replace(static_format="png", size=512).url
 
             if user_banner_url:=user.banner:
-                user_banner_url = inter.author.banner.replace(static_format="png", size=4096).url
+                user_banner_url = user.banner.replace(static_format="png", size=4096).url
 
             guild_avatar_url = None
             guild_banner_url = None
@@ -816,7 +816,7 @@ class Misc(commands.Cog):
                                             headers={"Authorization": f"Bot {bot.http.token}"}) as r:
                 data = await r.json()
 
-            user_avatar_url = inter.author.display_avatar.replace(static_format="png", size=512).url
+            user_avatar_url = user.display_avatar.replace(static_format="png", size=512).url
 
             if user_banner_url := data['user'].get('banner'):
                 user_banner_url = f"https://cdn.discordapp.com/banners/{user.id}/{user_banner_url}." + (
@@ -993,14 +993,21 @@ class GuildLog(commands.Cog):
         except AttributeError:
             pass
 
-        async with ClientSession() as session:
-            webhook = disnake.Webhook.from_url(self.hook_url, session=session)
-            await webhook.send(
-                content=", ".join(f"<@{owner_id}>" for owner_id in self.bot.owner_ids) or self.bot.owner.mention,
-                username=self.bot.user.name,
-                avatar_url=self.bot.user.display_avatar.replace(size=256, static_format="png").url,
+        if (channel:=self.bot.get_channel(self.bot.config["BOT_ADD_REMOVE_LOG_CHANNEL_ID"])) and channel.permissions_for(channel.guild.me).send_messages:
+            await channel.send(
+                ", ".join(f"<@{owner_id}>" for owner_id in self.bot.owner_ids) or self.bot.owner.mentionm,
                 embed=embed
             )
+
+        else:
+            async with ClientSession() as session:
+                webhook = disnake.Webhook.from_url(self.hook_url, session=session)
+                await webhook.send(
+                    content=", ".join(f"<@{owner_id}>" for owner_id in self.bot.owner_ids) or self.bot.owner.mention,
+                    username=self.bot.user.name,
+                    avatar_url=self.bot.user.display_avatar.replace(size=256, static_format="png").url,
+                    embed=embed
+                )
 
 
 def setup(bot: BotCore):

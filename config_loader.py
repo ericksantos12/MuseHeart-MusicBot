@@ -18,6 +18,7 @@ DEFAULT_CONFIG = {
     "COMMAND_LOG": False,
     "EMBED_COLOR": None,
     "BOT_ADD_REMOVE_LOG": '',
+    "BOT_ADD_REMOVE_LOG_CHANNEL_ID": 0,
     "ERROR_REPORT_WEBHOOK": '',
     "AUTO_ERROR_REPORT_WEBHOOK": '',
     "INTERACTION_COMMAND_ONLY": False,
@@ -71,6 +72,7 @@ DEFAULT_CONFIG = {
     "PLAYLIST_CACHE_TTL": 1800,
     "USE_YTM_TRACKINFO_SCROBBLE": False,
     "PARTIALTRACK_FIRST": False,
+    "CHECK_TRACK_SIMILARITY": False,
 
     ##############################################
     ### Sistema de música - Suporte ao spotify ###
@@ -150,6 +152,7 @@ DEFAULT_CONFIG = {
     ##############
     "USE_YTDL": True,
     "FORCE_USE_DEEZER_CLIENT": False,
+    "YOUTUBE_TRACK_COOLDOWN": 20,
     "SILENT_PUBLICBOT_WARNING": False,
     "DBCACHE_SIZE": 1000,
     "DBCACHE_TTL": 300
@@ -214,13 +217,18 @@ def load_config():
         "PLAYLIST_CACHE_SIZE",
         "PLAYLIST_CACHE_TTL",
         "SPOTIFY_PLAYLIST_EXTRA_PAGE_LIMIT",
+        "BOT_ADD_REMOVE_LOG_CHANNEL_ID",
+        "YOUTUBE_TRACK_COOLDOWN",
     ]:
+
+        if not CONFIG[i]:
+            CONFIG[i] = DEFAULT_CONFIG[i]
+            continue
+
         try:
-            new_value = int(CONFIG[i])
+            CONFIG[i] = int(CONFIG[i])
         except ValueError as e:
             raise Exception(f"Você usou uma configuração inválida! {i}: {CONFIG[i]}\n{repr(e)}")
-
-        CONFIG[i] = new_value
 
     # converter strings que requer valor bool/nulo.
     for i in [
@@ -236,6 +244,7 @@ def load_config():
         "AUTO_DOWNLOAD_LAVALINK_SERVERLIST",
         "ENABLE_LOGGER",
         "GUILD_DEAFEN_WARN",
+        "CHECK_TRACK_SIMILARITY",
         "ENABLE_DISCORD_URLS_PLAYBACK",
         "PLAYER_SESSIONS_MONGODB",
         "SENSITIVE_INFO_WARN",
@@ -269,20 +278,17 @@ def load_config():
         "FORCE_USE_DEEZER_CLIENT",
         "SILENT_PUBLICBOT_WARNING",
     ]:
-        if CONFIG[i] in (True, False, None):
+
+        if CONFIG[i] in (True, False, None, ""):
+            CONFIG[i] = DEFAULT_CONFIG[i]
             continue
 
         try:
-            new_value = bools[CONFIG[i]]
+            CONFIG[i] = bools[CONFIG[i]]
         except KeyError as e:
             raise Exception(f"Você usou uma configuração inválida! {i}: {CONFIG[i]}\n{repr(e)}")
 
-        CONFIG[i] = new_value
-
     CONFIG["RPC_SERVER"] = CONFIG["RPC_SERVER"].replace("$PORT", CONFIG.get("PORT") or environ.get("PORT", "80"))
-
-    if CONFIG["IDLE_TIMEOUT"] < 60:
-        CONFIG["IDLE_TIMEOUT"] = 60
 
     if CONFIG["WAIT_FOR_MEMBERS_TIMEOUT"] < 60:
         CONFIG["WAIT_FOR_MEMBERS_TIMEOUT"] = 60
@@ -292,6 +298,9 @@ def load_config():
 
     if CONFIG["IDLE_TIMEOUT"] < 10:
         CONFIG["IDLE_TIMEOUT"] = 10
+
+    if CONFIG["YOUTUBE_TRACK_COOLDOWN"] < 20:
+        CONFIG["YOUTUBE_TRACK_COOLDOWN"] = 20
 
     if CONFIG["PLAYER_INFO_BACKUP_INTERVAL"] < 30:
         CONFIG["PLAYER_INFO_BACKUP_INTERVAL"] = 30
